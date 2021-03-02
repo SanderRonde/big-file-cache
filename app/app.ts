@@ -1,4 +1,5 @@
 import filesizeParser from 'filesize-parser';
+import prettyBytes from 'pretty-bytes';
 import * as fs from 'fs-extra';
 
 const DEFAULT_INTERVAL_SECONDS = 60 * 60 * 24;
@@ -57,7 +58,9 @@ async function mergeBigFiles(files: FileMap, maxSize: number) {
 			const stat = await fs.stat(cacheFile);
 			if (stat.size >= maxSize) {
 				console.log(
-					`Appending ${stat.size} bytes of data from "${cacheFile}" to "${bigFile}...`
+					`Appending ${prettyBytes(
+						stat.size
+					)} bytes of data from "${cacheFile}" to "${bigFile}...`
 				);
 
 				// Do the merging
@@ -79,8 +82,13 @@ async function mergeBigFiles(files: FileMap, maxSize: number) {
 						.on('error', reject);
 				});
 
+				const bigFileStat = await fs.stat(bigFile);
 				console.log(
-					`Appended ${stat.size} bytes of data from "${cacheFile}" to "${bigFile}`
+					`Appended ${prettyBytes(
+						stat.size
+					)} bytes of data from "${cacheFile}" to "${bigFile}, bringing it to a total of ${prettyBytes(
+						bigFileStat.size
+					)}`
 				);
 			}
 		})
