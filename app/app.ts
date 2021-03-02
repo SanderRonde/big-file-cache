@@ -56,17 +56,27 @@ async function mergeBigFiles(files: FileMap, maxSize: number) {
 		Object.entries(files).map(async ([cacheFile, bigFile]) => {
 			const stat = await fs.stat(cacheFile);
 			if (stat.size >= maxSize) {
-				// Do the merging
-				const smallFileContents = await fs.readFile(cacheFile, {
-					encoding: 'utf8',
-				});
-				await fs.appendFile(bigFile, smallFileContents, {
-					encoding: 'utf8',
-				});
+				console.log(
+					`Appending ${stat.size} bytes of data from "${cacheFile}" to "${bigFile}...`
+				);
 
-				// Clear the old file
-				await fs.writeFile(cacheFile, '', {
-					encoding: 'utf8',
+				// Do the merging
+				const writeStream = fs.createWriteStream(bigFile, {
+					flags: 'a',
+				});
+				const readStream = fs.createReadStream(cacheFile);
+
+				await new Promise<void>((resolve, reject) => {
+					readStream
+						.pipe(writeStream)
+						.on('close', async () => {
+							// Clear the old file
+							await fs.writeFile(cacheFile, '', {
+								encoding: 'utf8',
+							});
+							resolve();
+						})
+						.on('error', reject);
 				});
 
 				console.log(
@@ -78,13 +88,17 @@ async function mergeBigFiles(files: FileMap, maxSize: number) {
 }
 
 async function startWatcher(io: IO) {
+	console.log('Doing initial merge');
 	await mergeBigFiles(io.files, io.maxSize);
+	console.log('Setting timer');
 	setInterval(async () => {
 		await mergeBigFiles(io.files, io.maxSize);
 	}, io.interval * 1000);
+	console.log('All set up!');
 }
 
 async function main() {
+	console.log('Starting...');
 	const io = await getFiles();
 	await startWatcher(io);
 }
