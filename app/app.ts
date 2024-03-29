@@ -53,46 +53,50 @@ async function getFiles() {
 }
 
 async function mergeBigFiles(files: FileMap, maxSize: number) {
-	await Promise.all(
-		Object.entries(files).map(async ([cacheFile, bigFile]) => {
-			const stat = await fs.stat(cacheFile);
-			if (stat.size >= maxSize) {
-				console.log(
-					`Appending ${prettyBytes(
-						stat.size
-					)} bytes of data from "${cacheFile}" to "${bigFile}...`
-				);
+	for (const [cacheFile, bigFile] of Object.entries(files)) {
+		const stat = await fs.stat(cacheFile);
+		if (stat.size < maxSize) {
+			console.log(
+				`File "${cacheFile}" is only ${prettyBytes(
+					stat.size
+				)} / ${prettyBytes(maxSize)}, skipping merge`
+			);
+			continue;
+		}
+		console.log(
+			`Appending ${prettyBytes(
+				stat.size
+			)} bytes of data from "${cacheFile}" to "${bigFile}...`
+		);
 
-				// Do the merging
-				const writeStream = fs.createWriteStream(bigFile, {
-					flags: 'a',
-				});
-				const readStream = fs.createReadStream(cacheFile);
+		// Do the merging
+		const writeStream = fs.createWriteStream(bigFile, {
+			flags: 'a',
+		});
+		const readStream = fs.createReadStream(cacheFile);
 
-				await new Promise<void>((resolve, reject) => {
-					readStream
-						.pipe(writeStream)
-						.on('close', async () => {
-							// Clear the old file
-							await fs.writeFile(cacheFile, '', {
-								encoding: 'utf8',
-							});
-							resolve();
-						})
-						.on('error', reject);
-				});
+		await new Promise<void>((resolve, reject) => {
+			readStream
+				.pipe(writeStream)
+				.on('close', async () => {
+					// Clear the old file
+					await fs.writeFile(cacheFile, '', {
+						encoding: 'utf8',
+					});
+					resolve();
+				})
+				.on('error', reject);
+		});
 
-				const bigFileStat = await fs.stat(bigFile);
-				console.log(
-					`Appended ${prettyBytes(
-						stat.size
-					)} bytes of data from "${cacheFile}" to "${bigFile}, bringing it to a total of ${prettyBytes(
-						bigFileStat.size
-					)}`
-				);
-			}
-		})
-	);
+		const bigFileStat = await fs.stat(bigFile);
+		console.log(
+			`Appended ${prettyBytes(
+				stat.size
+			)} bytes of data from "${cacheFile}" to "${bigFile}, bringing it to a total of ${prettyBytes(
+				bigFileStat.size
+			)}`
+		);
+	}
 }
 
 async function startWatcher(io: IO) {
@@ -108,6 +112,7 @@ async function startWatcher(io: IO) {
 async function main() {
 	console.log('Starting...');
 	const io = await getFiles();
+	console.log('Files=', io.files);
 	await startWatcher(io);
 }
 
