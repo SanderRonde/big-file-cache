@@ -69,24 +69,42 @@ async function mergeBigFiles(files: FileMap, maxSize: number) {
 			)} bytes of data from "${cacheFile}" to "${bigFile}...`
 		);
 
-		// Do the merging
-		const writeStream = fs.createWriteStream(bigFile, {
-			flags: 'a',
-		});
-		const readStream = fs.createReadStream(cacheFile);
+		// We ensure no data is lost in this process. We do this by moving the file first
+		// and replacing it with an empty file. Then we copy the data, then we remove the
+		// old file. If anything went wrong inbetween, we can just restore the old file.
+		const tmpFileLocation = `${cacheFile}.tmp`;
+		await fs.rename(cacheFile, tmpFileLocation);
+		await fs.writeFile(cacheFile, '', 'utf-8');
 
-		await new Promise<void>((resolve, reject) => {
-			readStream
-				.pipe(writeStream)
-				.on('close', async () => {
-					// Clear the old file
-					await fs.writeFile(cacheFile, '', {
-						encoding: 'utf8',
-					});
-					resolve();
-				})
-				.on('error', reject);
+		process.on('beforeExit', () => {
+			// Quickly restore. This is not the best way to do this but the fastest
+			fs.rename(tmpFileLocation, cacheFile);
 		});
+
+		// Do the merging
+		try {
+			const writeStream = fs.createWriteStream(bigFile, {
+				flags: 'a',
+			});
+			const readStream = fs.createReadStream(tmpFileLocation);
+			await new Promise((resolve, reject) => {
+				readStream.pipe(writeStream);
+				readStream.on('end', resolve);
+				readStream.on('error', reject);
+			});
+		} catch (e) {
+			// Something went wrong, restore the old file and anything
+			// that happened inbetween
+			await fs.writeFile(
+				cacheFile,
+				(await fs.readFile(tmpFileLocation, 'utf-8')) +
+					(await fs.readFile(cacheFile, 'utf-8')),
+				'utf-8'
+			);
+		} finally {
+			// Delete the tmp file
+			await fs.unlink(tmpFileLocation);
+		}
 
 		const bigFileStat = await fs.stat(bigFile);
 		console.log(
