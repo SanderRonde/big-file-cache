@@ -15,6 +15,37 @@ interface IO {
 	maxSize: number;
 }
 
+async function performMerge(
+	bigFilePath: string,
+	cacheFilePath: string,
+	tmpFilePath: string,
+) {
+	try {
+		const writeStream = fs.createWriteStream(bigFilePath, {
+			flags: 'a',
+		});
+		const readStream = fs.createReadStream(tmpFilePath);
+		await new Promise((resolve, reject) => {
+			readStream.pipe(writeStream);
+			readStream.on('end', resolve);
+			readStream.on('error', reject);
+		});
+	} catch (e) {
+		// Something went wrong, restore the old file and anything
+		// that happened inbetween
+		await fs.writeFile(
+			cacheFilePath,
+			(await fs.readFile(tmpFilePath, 'utf-8')) +
+				(await fs.readFile(cacheFilePath, 'utf-8')),
+			'utf-8',
+		);
+		throw e;
+	} finally {
+		// Delete the tmp file
+		await fs.unlink(tmpFilePath);
+	}
+}
+
 async function getFiles() {
 	let files: FileMap = {};
 	let interval: number = DEFAULT_INTERVAL_SECONDS;
@@ -25,7 +56,7 @@ async function getFiles() {
 			files = JSON.parse(
 				await fs.readFile(process.argv[i + 1], {
 					encoding: 'utf8',
-				})
+				}),
 			);
 			i++;
 		} else if (arg === '--interval') {
@@ -53,66 +84,51 @@ async function getFiles() {
 }
 
 async function mergeBigFiles(files: FileMap, maxSize: number) {
-	for (const [cacheFile, bigFile] of Object.entries(files)) {
-		const stat = await fs.stat(cacheFile);
+	for (const [cacheFilePath, bigFilePath] of Object.entries(files)) {
+		const stat = await fs.stat(cacheFilePath);
 		if (stat.size < maxSize) {
 			console.log(
-				`File "${cacheFile}" is only ${prettyBytes(
-					stat.size
-				)} / ${prettyBytes(maxSize)}, skipping merge`
+				`File "${cacheFilePath}" is only ${prettyBytes(
+					stat.size,
+				)} / ${prettyBytes(maxSize)}, skipping merge`,
 			);
 			continue;
 		}
 		console.log(
 			`Appending ${prettyBytes(
-				stat.size
-			)} bytes of data from "${cacheFile}" to "${bigFile}...`
+				stat.size,
+			)} bytes of data from "${cacheFilePath}" to "${bigFilePath}...`,
 		);
 
 		// We ensure no data is lost in this process. We do this by moving the file first
 		// and replacing it with an empty file. Then we copy the data, then we remove the
 		// old file. If anything went wrong inbetween, we can just restore the old file.
-		const tmpFileLocation = `${cacheFile}.tmp`;
-		await fs.rename(cacheFile, tmpFileLocation);
-		await fs.writeFile(cacheFile, '', 'utf-8');
+		const tmpFilePath = `${cacheFilePath}.tmp`;
+		await fs.rename(cacheFilePath, tmpFilePath);
+		await fs.writeFile(cacheFilePath, '', 'utf-8');
 
-		process.on('beforeExit', () => {
+		const beforeExitHook = () => {
 			// Quickly restore. This is not the best way to do this but the fastest
-			fs.rename(tmpFileLocation, cacheFile);
-		});
+			fs.rename(tmpFilePath, cacheFilePath);
+		};
+		process.on('beforeExit', beforeExitHook);
 
 		// Do the merging
 		try {
-			const writeStream = fs.createWriteStream(bigFile, {
-				flags: 'a',
-			});
-			const readStream = fs.createReadStream(tmpFileLocation);
-			await new Promise((resolve, reject) => {
-				readStream.pipe(writeStream);
-				readStream.on('end', resolve);
-				readStream.on('error', reject);
-			});
+			await performMerge(bigFilePath, cacheFilePath, tmpFilePath);
 		} catch (e) {
-			// Something went wrong, restore the old file and anything
-			// that happened inbetween
-			await fs.writeFile(
-				cacheFile,
-				(await fs.readFile(tmpFileLocation, 'utf-8')) +
-					(await fs.readFile(cacheFile, 'utf-8')),
-				'utf-8'
-			);
+			console.error('Error during merge:', e);
 		} finally {
-			// Delete the tmp file
-			await fs.unlink(tmpFileLocation);
+			process.off('beforeExit', beforeExitHook);
 		}
 
-		const bigFileStat = await fs.stat(bigFile);
+		const bigFileStat = await fs.stat(bigFilePath);
 		console.log(
 			`Appended ${prettyBytes(
-				stat.size
-			)} bytes of data from "${cacheFile}" to "${bigFile}, bringing it to a total of ${prettyBytes(
-				bigFileStat.size
-			)}`
+				stat.size,
+			)} bytes of data from "${cacheFilePath}" to "${bigFilePath}, bringing it to a total of ${prettyBytes(
+				bigFileStat.size,
+			)}`,
 		);
 	}
 }
